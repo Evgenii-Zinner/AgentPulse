@@ -1,0 +1,42 @@
+## Visual Studio / .NET Core / WinUI
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+.vs/
+.vscode/
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+*.userprefs
+*.dbmdl
+
+## Windows / AppX Packaging
+*.appx
+*.msix
+*.appxbundle
+*.msixbundle
+*.pri
+AppPackages/
+BundleArtifacts/
+Package.StoreAssociation.xml
+_pkginfo.txt
+
+## OS / Temp files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.tmp
+*.temp
+*.log
+*status.json
+err.txt
+out.txt
+
+## Sensitive credentials
+client_secret*.json
+*.pfx
+*.cer
+*.key
