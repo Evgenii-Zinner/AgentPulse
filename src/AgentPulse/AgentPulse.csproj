@@ -28,9 +28,6 @@
     </Content>
     <Manifest Include="$(ApplicationManifest)" />
     <None Include="Package.appxmanifest" />
-    <None Update="client_secret*.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
   </ItemGroup>
 
   <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">

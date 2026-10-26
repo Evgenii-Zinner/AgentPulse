@@ -23,8 +23,6 @@ public partial class App : Application
 
     private static void ConfigureServices(IServiceCollection services)
     {
-        services.AddSingleton<GoogleAuthService>();
-        services.AddSingleton<GoogleQuotaProvider>();
         services.AddSingleton<AntigravityQuotaProvider>();
         services.AddSingleton<LockScreenUpdater>();
         services.AddSingleton<MainViewModel>();

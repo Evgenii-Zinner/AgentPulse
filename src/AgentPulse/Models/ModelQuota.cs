@@ -12,7 +12,7 @@ public class ModelQuota
     public string LimitValue { get; set; } = string.Empty;
     public string UsageValue { get; set; } = string.Empty;
     public string Dimensions { get; set; } = string.Empty;
-    
+
     // Primary limit (5-hour rolling limit or weekly limit)
     public string PrimaryLimitLabel { get; set; } = "5h";
     public double RemainingFraction { get; set; } = 1.0; // 0.0 - 1.0
