@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Net.NetworkInformation;
 using System.Threading;
 using System.Threading.Tasks;
 using AgentPulse.Models;
@@ -96,6 +97,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             SystemEvents.SessionSwitch += OnSessionSwitch;
+            NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
         }
         catch { }
 
@@ -289,10 +291,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _lockScreenUpdater.UpdateTileText(_lastStatus);
             }
         }
-        else if (e.Reason == SessionSwitchReason.SessionUnlock)
+        else if (e.Reason == SessionSwitchReason.SessionUnlock || e.Reason == SessionSwitchReason.SessionLogon)
         {
             _countdownTimer?.Start();
             _ = RefreshAsync();
+        }
+    }
+
+    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
+    {
+        if (e.IsAvailable)
+        {
+            _dispatcherQueue.TryEnqueue(async () => await RefreshAsync());
         }
     }
 
@@ -367,6 +377,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             SystemEvents.SessionSwitch -= OnSessionSwitch;
+            NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
         }
         catch { }
 

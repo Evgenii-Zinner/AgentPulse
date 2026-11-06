@@ -23,7 +23,7 @@ public partial class App : Application
 
     private static void ConfigureServices(IServiceCollection services)
     {
-        services.AddSingleton<AntigravityQuotaProvider>();
+        services.AddSingleton(AntigravityQuotaProvider.SharedInstance);
         services.AddSingleton<LockScreenUpdater>();
         services.AddSingleton<MainViewModel>();
         services.AddTransient<MainWindow>();

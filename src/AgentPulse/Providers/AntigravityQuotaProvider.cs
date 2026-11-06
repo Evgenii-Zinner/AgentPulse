@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.NetworkInformation;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,6 +13,24 @@ namespace AgentPulse.Providers;
 
 public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
 {
+    private static AntigravityQuotaProvider? _sharedInstance;
+    private static readonly object _instanceLock = new();
+
+    public static AntigravityQuotaProvider SharedInstance
+    {
+        get
+        {
+            if (_sharedInstance == null)
+            {
+                lock (_instanceLock)
+                {
+                    _sharedInstance ??= new AntigravityQuotaProvider();
+                }
+            }
+            return _sharedInstance;
+        }
+    }
+
     public string ProviderName => "Google Antigravity";
     public bool IsConfigured => true;
     public DateTime? LastUpdated { get; private set; }
@@ -23,6 +42,10 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
     private StreamWriter? _stdin;
     private StreamReader? _stdout;
     private bool _isDisposed;
+
+    private AgentStatus? _lastSuccessfulStatus;
+    private DateTime _lastFetchTime = DateTime.MinValue;
+    private static readonly TimeSpan CacheDebounceInterval = TimeSpan.FromSeconds(15);
 
     private static string ResolveAgyPath()
     {
@@ -42,6 +65,42 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
 
         // 3. Fallback to PATH resolution
         return "agy.exe";
+    }
+
+    public static async Task<bool> WaitForNetworkAvailableAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        if (NetworkInterface.GetIsNetworkAvailable())
+        {
+            return true;
+        }
+
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        NetworkAvailabilityChangedEventHandler handler = (s, e) =>
+        {
+            if (e.IsAvailable)
+            {
+                tcs.TrySetResult(true);
+            }
+        };
+
+        NetworkChange.NetworkAvailabilityChanged += handler;
+        try
+        {
+            if (NetworkInterface.GetIsNetworkAvailable())
+            {
+                return true;
+            }
+
+            using var timeoutCts = new CancellationTokenSource(timeout);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+            using var reg = linkedCts.Token.Register(() => tcs.TrySetResult(false));
+
+            return await tcs.Task;
+        }
+        finally
+        {
+            NetworkChange.NetworkAvailabilityChanged -= handler;
+        }
     }
 
     private async Task EnsureSubprocessAsync(CancellationToken cancellationToken)
@@ -65,6 +124,8 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden
         };
+        psi.Environment["BROWSER"] = "none";
+        psi.Environment["NONINTERACTIVE"] = "1";
 
         var proc = Process.Start(psi);
         if (proc == null)
@@ -76,9 +137,9 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
         _stdin = proc.StandardInput;
         _stdout = proc.StandardOutput;
 
-        // Read initial init line with timeout
+        // Read initial init line with timeout (allow up to 15s for cold start)
         using var initCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        initCts.CancelAfter(TimeSpan.FromSeconds(5));
+        initCts.CancelAfter(TimeSpan.FromSeconds(15));
 
         try
         {
@@ -129,6 +190,20 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
         await _lock.WaitAsync(cancellationToken);
         try
         {
+            // If we fetched recently, return cached status to debounce rapid callers
+            if (_lastSuccessfulStatus != null && DateTime.UtcNow - _lastFetchTime < CacheDebounceInterval)
+            {
+                return _lastSuccessfulStatus;
+            }
+
+            // Guard: Await network availability before touching agy (e.g. after cold boot / power off)
+            // If already online, returns immediately (0ms). If offline, resumes the instant network connects.
+            bool isOnline = await WaitForNetworkAvailableAsync(TimeSpan.FromSeconds(8), cancellationToken);
+            if (!isOnline)
+            {
+                return _lastSuccessfulStatus ?? CreateOfflineStatus("Waiting for network connection...");
+            }
+
             // Attempt 1: Query persistent subprocess via stdin/stdout
             try
             {
@@ -141,7 +216,7 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
                     await _stdin.FlushAsync(cancellationToken);
 
                     using var readCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    readCts.CancelAfter(TimeSpan.FromSeconds(4));
+                    readCts.CancelAfter(TimeSpan.FromSeconds(6));
 
                     string? line;
                     while ((line = await _stdout.ReadLineAsync(readCts.Token)) != null)
@@ -151,6 +226,8 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
                             var statusFromStream = ParseAgyUsageJson(line);
                             if (statusFromStream.Models.Count > 0)
                             {
+                                _lastSuccessfulStatus = statusFromStream;
+                                _lastFetchTime = DateTime.UtcNow;
                                 LastUpdated = statusFromStream.LastUpdated;
                                 StatusUpdated?.Invoke(statusFromStream);
                                 return statusFromStream;
@@ -177,11 +254,13 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
                 CreateNoWindow = true,
                 WindowStyle = ProcessWindowStyle.Hidden
             };
+            psi.Environment["BROWSER"] = "none";
+            psi.Environment["NONINTERACTIVE"] = "1";
 
             using var proc = Process.Start(psi);
             if (proc == null)
             {
-                return CreateOfflineStatus("Failed to launch 'agy' CLI process.");
+                return _lastSuccessfulStatus ?? CreateOfflineStatus("Failed to launch 'agy' CLI process.");
             }
 
             var outputTask = proc.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -190,10 +269,16 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
 
             if (string.IsNullOrWhiteSpace(output))
             {
-                return CreateOfflineStatus("No output returned from 'agy /usage'.");
+                return _lastSuccessfulStatus ?? CreateOfflineStatus("No output returned from 'agy /usage'.");
             }
 
             var status = ParseAgyUsageJson(output);
+            if (status.Models.Count > 0)
+            {
+                _lastSuccessfulStatus = status;
+                _lastFetchTime = DateTime.UtcNow;
+            }
+
             LastUpdated = status.LastUpdated;
             StatusUpdated?.Invoke(status);
             return status;

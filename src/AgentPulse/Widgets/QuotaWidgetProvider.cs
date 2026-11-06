@@ -19,7 +19,7 @@ namespace AgentPulse.Widgets;
 public class QuotaWidgetProvider : IWidgetProvider
 {
     private static readonly ConcurrentDictionary<string, WidgetContext> ActiveWidgets = new();
-    private readonly AntigravityQuotaProvider _quotaProvider = new();
+    private readonly AntigravityQuotaProvider _quotaProvider = AntigravityQuotaProvider.SharedInstance;
 
     public void CreateWidget(WidgetContext widgetContext)
     {
