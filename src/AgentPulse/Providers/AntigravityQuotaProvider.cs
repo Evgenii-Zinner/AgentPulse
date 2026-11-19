@@ -34,6 +34,7 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
     public string ProviderName => "Google Antigravity";
     public bool IsConfigured => true;
     public DateTime? LastUpdated { get; private set; }
+    public AgentStatus? CachedStatus => _lastSuccessfulStatus;
 
     public event Action<AgentStatus>? StatusUpdated;
 
@@ -46,6 +47,70 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
     private AgentStatus? _lastSuccessfulStatus;
     private DateTime _lastFetchTime = DateTime.MinValue;
     private static readonly TimeSpan CacheDebounceInterval = TimeSpan.FromSeconds(15);
+    private static readonly JsonSerializerOptions CacheJsonOptions = new() { WriteIndented = true };
+
+    public AntigravityQuotaProvider()
+    {
+        LoadCachedStatus();
+    }
+
+    private static string GetCacheFilePath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "AgentPulse",
+        "last-status.json");
+
+    private void LoadCachedStatus()
+    {
+        try
+        {
+            var cachePath = GetCacheFilePath();
+            if (!File.Exists(cachePath))
+                return;
+
+            var cachedStatus = JsonSerializer.Deserialize<AgentStatus>(File.ReadAllText(cachePath));
+            if (cachedStatus == null || !cachedStatus.IsSuccess || cachedStatus.Models == null || cachedStatus.Models.Count == 0)
+                return;
+
+            cachedStatus.StatusMessage = $"Showing saved quotas from {cachedStatus.LastUpdated.ToLocalTime():g}; refreshing...";
+            _lastSuccessfulStatus = cachedStatus;
+            LastUpdated = cachedStatus.LastUpdated;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Debug.WriteLine($"Unable to load cached quota status: {ex.Message}");
+        }
+    }
+
+    private async Task RecordSuccessfulStatusAsync(AgentStatus status)
+    {
+        _lastSuccessfulStatus = status;
+        _lastFetchTime = DateTime.UtcNow;
+        LastUpdated = status.LastUpdated;
+
+        try
+        {
+            var cachePath = GetCacheFilePath();
+            var cacheDirectory = Path.GetDirectoryName(cachePath)!;
+            Directory.CreateDirectory(cacheDirectory);
+
+            var tempPath = $"{cachePath}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                var json = JsonSerializer.Serialize(status, CacheJsonOptions);
+                await File.WriteAllTextAsync(tempPath, json);
+                File.Move(tempPath, cachePath, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                    File.Delete(tempPath);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Debug.WriteLine($"Unable to save cached quota status: {ex.Message}");
+        }
+    }
 
     private static string ResolveAgyPath()
     {
@@ -226,9 +291,7 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
                             var statusFromStream = ParseAgyUsageJson(line);
                             if (statusFromStream.Models.Count > 0)
                             {
-                                _lastSuccessfulStatus = statusFromStream;
-                                _lastFetchTime = DateTime.UtcNow;
-                                LastUpdated = statusFromStream.LastUpdated;
+                                await RecordSuccessfulStatusAsync(statusFromStream);
                                 StatusUpdated?.Invoke(statusFromStream);
                                 return statusFromStream;
                             }
@@ -275,8 +338,11 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
             var status = ParseAgyUsageJson(output);
             if (status.Models.Count > 0)
             {
-                _lastSuccessfulStatus = status;
-                _lastFetchTime = DateTime.UtcNow;
+                await RecordSuccessfulStatusAsync(status);
+            }
+            else if (_lastSuccessfulStatus != null)
+            {
+                return _lastSuccessfulStatus;
             }
 
             LastUpdated = status.LastUpdated;
@@ -285,6 +351,12 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
         }
         catch (Exception ex)
         {
+            if (_lastSuccessfulStatus != null)
+            {
+                Debug.WriteLine($"Quota refresh failed; retaining cached status: {ex.Message}");
+                return _lastSuccessfulStatus;
+            }
+
             var errStatus = new AgentStatus
             {
                 ProviderName = ProviderName,

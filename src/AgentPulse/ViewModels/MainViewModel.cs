@@ -102,6 +102,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         catch { }
 
         StartUiTimers();
+        if (_quotaProvider.CachedStatus is { } cachedStatus)
+        {
+            ApplyStatus(cachedStatus);
+        }
+
         _ = RefreshAsync();
     }
 
