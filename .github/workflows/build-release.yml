@@ -1,0 +1,82 @@
+name: Build and release
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 11.0.x
+      - name: Build
+        run: dotnet build src/AgentPulse/AgentPulse.csproj --configuration Release --runtime win-x64
+
+  release-please:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish-release:
+    if: needs.release-please.outputs.release_created == 'true'
+    needs: release-please
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 11.0.x
+      - name: Publish self-contained Windows x64 build
+        env:
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Unexpected release tag version: $env:RELEASE_TAG"
+          }
+          $packageVersion = "$version.0"
+          dotnet publish src/AgentPulse/AgentPulse.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            --output publish `
+            "-p:AppxPackageVersion=$packageVersion" `
+            -p:AppxPackageSigningEnabled=false
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          Compress-Archive -Path publish\* -DestinationPath AgentPulse-win-x64.zip -Force
+      - name: Upload release ZIP
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: gh release upload "$env:RELEASE_TAG" AgentPulse-win-x64.zip --clobber
