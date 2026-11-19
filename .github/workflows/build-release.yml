@@ -7,9 +7,15 @@ on:
   push:
     branches:
       - master
+  workflow_dispatch:
+    inputs:
+      target_tag:
+        description: 'Release tag to publish to (e.g. v1.0.1). Defaults to latest release if blank.'
+        required: false
+        default: 'v1.0.1'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -19,8 +25,65 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 11.0.x
-      - name: Build
-        run: dotnet build src/AgentPulse/AgentPulse.csproj --configuration Release --runtime win-x64
+
+      - name: Create Temporary Self-Signed Certificate
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject "CN=AgentPulse" `
+            -KeyUsage DigitalSignature `
+            -FriendlyName "AgentPulse" `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
+
+          $pfxPassword = "AgentPulseCI2026!"
+          $securePassword = ConvertTo-SecureString -String $pfxPassword -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath "$PWD\AgentPulse_TestKey.pfx" -Password $securePassword
+          Export-Certificate -Cert $cert -FilePath "$PWD\AgentPulse.cer"
+
+      - name: Build and Package MSIX
+        shell: pwsh
+        run: |
+          dotnet publish src/AgentPulse/AgentPulse.csproj `
+            --configuration Release `
+            -f net11.0-windows10.0.26100.0 `
+            --runtime win-x64 `
+            --self-contained true `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            -p:GenerateAppxPackageOnBuild=true `
+            -p:AppxPackageSigningEnabled=true `
+            "-p:PackageCertificateKeyFile=$PWD\AgentPulse_TestKey.pfx" `
+            "-p:PackageCertificatePassword=AgentPulseCI2026!" `
+            -p:UapAppxPackageBuildMode=SideloadOnly `
+            -p:AppxBundle=Never `
+            "-p:AppxPackageDir=$PWD\AppPackages\"
+
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          $msix = Get-ChildItem -Path "$PWD\AppPackages" -Filter "*.msix" -Recurse | Select-Object -First 1
+          if (-not $msix) {
+            $msix = Get-ChildItem -Path "$PWD\AppPackages" -Include "*.msixbundle","*.appx" -Recurse | Select-Object -First 1
+          }
+          if ($msix) {
+            Write-Host "MSIX generated at: $($msix.FullName)"
+            Copy-Item -Path $msix.FullName -Destination "$PWD\AgentPulse-win-x64.msix" -Force
+          } else {
+            Get-ChildItem -Path "$PWD\AppPackages" -Recurse
+            throw "MSIX package was not generated!"
+          }
+
+      - name: Upload MSIX Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentPulse-win-x64-msix
+          path: |
+            AgentPulse-win-x64.msix
+            AgentPulse.cer
+          if-no-files-found: error
 
   release-please:
     if: github.event_name == 'push'
@@ -42,41 +105,102 @@ jobs:
           manifest-file: .release-please-manifest.json
 
   publish-release:
-    if: needs.release-please.outputs.release_created == 'true'
-    needs: release-please
+    if: always() && !cancelled() && needs.build.result == 'success' && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch')
+    needs: [build, release-please]
     runs-on: windows-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 11.0.x
-      - name: Publish self-contained Windows x64 build
-        env:
-          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Determine Release Tag
+        id: release-tag
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ inputs.target_tag }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = "${{ needs.release-please.outputs.tag_name }}"
+          }
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = (gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          }
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw "Could not determine target release tag."
+          }
+          Write-Host "Determined Release Tag: $tag"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Publish and Upload MSIX Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release-tag.outputs.tag }}
         run: |
           $version = $env:RELEASE_TAG -replace '^v', ''
           if ($version -notmatch '^\d+\.\d+\.\d+$') {
             throw "Unexpected release tag version: $env:RELEASE_TAG"
           }
           $packageVersion = "$version.0"
+          Write-Host "Packaging MSIX for version: $packageVersion"
+
+          $cert = New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject "CN=AgentPulse" `
+            -KeyUsage DigitalSignature `
+            -FriendlyName "AgentPulse" `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
+
+          $pfxPassword = "AgentPulseCI2026!"
+          $securePassword = ConvertTo-SecureString -String $pfxPassword -Force -AsPlainText
+          $pfxPath = "$PWD\AgentPulse_SigningKey.pfx"
+          $cerPath = "$PWD\AgentPulse.cer"
+          Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $securePassword
+          Export-Certificate -Cert $cert -FilePath $cerPath
+
           dotnet publish src/AgentPulse/AgentPulse.csproj `
             --configuration Release `
+            -f net11.0-windows10.0.26100.0 `
             --runtime win-x64 `
             --self-contained true `
-            --output publish `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
             "-p:AppxPackageVersion=$packageVersion" `
-            -p:AppxPackageSigningEnabled=false
+            -p:GenerateAppxPackageOnBuild=true `
+            -p:AppxPackageSigningEnabled=true `
+            "-p:PackageCertificateKeyFile=$pfxPath" `
+            "-p:PackageCertificatePassword=$pfxPassword" `
+            -p:UapAppxPackageBuildMode=SideloadOnly `
+            -p:AppxBundle=Never `
+            "-p:AppxPackageDir=$PWD\AppPackages\"
+
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
-          Compress-Archive -Path publish\* -DestinationPath AgentPulse-win-x64.zip -Force
-      - name: Upload release ZIP
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
-        run: gh release upload "$env:RELEASE_TAG" AgentPulse-win-x64.zip --clobber
+
+          $msixFile = Get-ChildItem -Path "$PWD\AppPackages" -Filter "*.msix" -Recurse | Select-Object -First 1
+          if (-not $msixFile) {
+            $msixFile = Get-ChildItem -Path "$PWD\AppPackages" -Include "*.msixbundle","*.appx" -Recurse | Select-Object -First 1
+          }
+          if (-not $msixFile) {
+            Get-ChildItem -Path "$PWD\AppPackages" -Recurse
+            throw "MSIX package was not found in AppPackages!"
+          }
+
+          $releaseMsix = "$PWD\AgentPulse-win-x64.msix"
+          Copy-Item -Path $msixFile.FullName -Destination $releaseMsix -Force
+
+          # Remove existing ZIP asset if present so release has MSIX instead of ZIP
+          $existingAssets = gh release view "$env:RELEASE_TAG" --json assets --jq '.assets[].name'
+          if ($existingAssets -contains "AgentPulse-win-x64.zip") {
+            Write-Host "Deleting existing AgentPulse-win-x64.zip from release $env:RELEASE_TAG"
+            gh release delete-asset "$env:RELEASE_TAG" AgentPulse-win-x64.zip -y
+          }
+
+          Write-Host "Uploading $releaseMsix and $cerPath to release $env:RELEASE_TAG"
+          gh release upload "$env:RELEASE_TAG" "$releaseMsix" "$cerPath" --clobber
