@@ -7,9 +7,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading.Tasks;
-using AgentPulse.Models;
 using AgentPulse.Providers;
-using Microsoft.Windows.Widgets;
 using Microsoft.Windows.Widgets.Providers;
 
 namespace AgentPulse.Widgets;
@@ -24,13 +22,13 @@ public class QuotaWidgetProvider : IWidgetProvider
     public void CreateWidget(WidgetContext widgetContext)
     {
         ActiveWidgets[widgetContext.Id] = widgetContext;
-        _ = UpdateWidgetAsync(widgetContext.Id, widgetContext.Size);
+        _ = UpdateWidgetAsync(widgetContext.Id);
     }
 
     public void Activate(WidgetContext widgetContext)
     {
         ActiveWidgets[widgetContext.Id] = widgetContext;
-        _ = UpdateWidgetAsync(widgetContext.Id, widgetContext.Size);
+        _ = UpdateWidgetAsync(widgetContext.Id);
     }
 
     public void Deactivate(string widgetId)
@@ -45,23 +43,20 @@ public class QuotaWidgetProvider : IWidgetProvider
 
     public void OnActionInvoked(WidgetActionInvokedArgs actionInvokedArgs)
     {
-        var widgetId = actionInvokedArgs.WidgetContext.Id;
-        var size = actionInvokedArgs.WidgetContext.Size;
-        _ = UpdateWidgetAsync(widgetId, size);
+        _ = UpdateWidgetAsync(actionInvokedArgs.WidgetContext.Id);
     }
 
     public void OnWidgetContextChanged(WidgetContextChangedArgs contextChangedArgs)
     {
         var widgetId = contextChangedArgs.WidgetContext.Id;
-        var size = contextChangedArgs.WidgetContext.Size;
-        if (ActiveWidgets.TryGetValue(widgetId, out var context))
+        if (ActiveWidgets.TryGetValue(widgetId, out _))
         {
             ActiveWidgets[widgetId] = contextChangedArgs.WidgetContext;
         }
-        _ = UpdateWidgetAsync(widgetId, size);
+        _ = UpdateWidgetAsync(widgetId);
     }
 
-    private async Task UpdateWidgetAsync(string widgetId, WidgetSize size)
+    private async Task UpdateWidgetAsync(string widgetId)
     {
         try
         {
@@ -71,7 +66,6 @@ public class QuotaWidgetProvider : IWidgetProvider
             int geminiSecondaryPercent = 100;
             bool geminiHasSecondary = false;
             string geminiReset = "Ready";
-            string geminiSecondaryReset = "Ready";
 
             int claudePercent = 100;
             int claudeSecondaryPercent = 100;
@@ -92,7 +86,6 @@ public class QuotaWidgetProvider : IWidgetProvider
                     geminiSecondaryPercent = m.SecondaryPercentRemaining;
                     geminiHasSecondary = m.HasSecondaryLimit;
                     geminiReset = m.FormattedReset;
-                    geminiSecondaryReset = m.FormattedSecondaryReset;
                 }
                 else if (m.Name.Contains("claude", StringComparison.OrdinalIgnoreCase) ||
                          m.Name.Contains("gpt", StringComparison.OrdinalIgnoreCase))
@@ -119,21 +112,16 @@ public class QuotaWidgetProvider : IWidgetProvider
 
             var dataObj = new
             {
-                gemini_percent = geminiPercent,
-                gemini_secondary_percent = geminiSecondaryPercent,
                 gemini_reset = geminiReset,
-                gemini_secondary_reset = geminiSecondaryReset,
                 gemini_circle_image = geminiCircleImg,
-                claude_percent = claudePercent,
                 claude_reset = claudeReset,
                 claude_circle_image = claudeCircleImg,
-                argon_percent = argonPercent,
                 argon_reset = argonReset,
                 argon_circle_image = argonCircleImg
             };
 
             var dataJson = JsonSerializer.Serialize(dataObj);
-            var templatePath = GetTemplatePathForSize(size);
+            var templatePath = GetTemplatePath();
             var templateJson = await File.ReadAllTextAsync(templatePath);
 
             var updateOptions = new WidgetUpdateRequestOptions(widgetId)
@@ -210,9 +198,8 @@ public class QuotaWidgetProvider : IWidgetProvider
         return "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
     }
 
-    private static string GetTemplatePathForSize(WidgetSize size)
+    private static string GetTemplatePath()
     {
-        var baseDir = AppContext.BaseDirectory;
-        return Path.Combine(baseDir, "Widgets", "WidgetSmall.json");
+        return Path.Combine(AppContext.BaseDirectory, "Widgets", "WidgetSmall.json");
     }
 }

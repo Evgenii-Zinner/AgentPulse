@@ -31,9 +31,6 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
         }
     }
 
-    public string ProviderName => "Google Antigravity";
-    public bool IsConfigured => true;
-    public DateTime? LastUpdated { get; private set; }
     public AgentStatus? CachedStatus => _lastSuccessfulStatus;
 
     public event Action<AgentStatus>? StatusUpdated;
@@ -71,9 +68,7 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
             if (cachedStatus == null || !cachedStatus.IsSuccess || cachedStatus.Models == null || cachedStatus.Models.Count == 0)
                 return;
 
-            cachedStatus.StatusMessage = $"Showing saved quotas from {cachedStatus.LastUpdated.ToLocalTime():g}; refreshing...";
             _lastSuccessfulStatus = cachedStatus;
-            LastUpdated = cachedStatus.LastUpdated;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -85,7 +80,6 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
     {
         _lastSuccessfulStatus = status;
         _lastFetchTime = DateTime.UtcNow;
-        LastUpdated = status.LastUpdated;
 
         try
         {
@@ -132,7 +126,7 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
         return "agy.exe";
     }
 
-    public static async Task<bool> WaitForNetworkAvailableAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    private static async Task<bool> WaitForNetworkAvailableAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         if (NetworkInterface.GetIsNetworkAvailable())
         {
@@ -345,7 +339,6 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
                 return _lastSuccessfulStatus;
             }
 
-            LastUpdated = status.LastUpdated;
             StatusUpdated?.Invoke(status);
             return status;
         }
@@ -359,14 +352,10 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
 
             var errStatus = new AgentStatus
             {
-                ProviderName = ProviderName,
                 IsSuccess = false,
                 StatusLevel = StatusLevel.Warning,
-                StatusMessage = $"Antigravity CLI error: {ex.Message}",
-                ErrorDetail = ex.ToString(),
                 LastUpdated = DateTime.UtcNow
             };
-            LastUpdated = errStatus.LastUpdated;
             StatusUpdated?.Invoke(errStatus);
             return errStatus;
         }
@@ -457,14 +446,10 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
                     {
                         models.Add(new ModelQuota
                         {
-                            Id = groupName.ToLowerInvariant().Replace(" ", "-"),
                             Name = groupName,
-                            Tier = "Pro",
-                            PrimaryLimitLabel = "Weekly",
                             RemainingFraction = weeklyFraction,
                             ResetAt = weeklyReset,
-                            HasSecondaryLimit = false,
-                            SecondaryLimitLabel = "WEEKLY"
+                            HasSecondaryLimit = false
                         });
                     }
                     else
@@ -472,16 +457,12 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
                         // Dual limits: Gemini Models (80% 5h, 79% weekly) & Claude and GPT
                         models.Add(new ModelQuota
                         {
-                            Id = groupName.ToLowerInvariant().Replace(" ", "-"),
                             Name = groupName,
-                            Tier = "Pro",
-                            PrimaryLimitLabel = "5h",
                             RemainingFraction = fiveHourFraction,
                             ResetAt = fiveHourReset,
                             HasSecondaryLimit = hasWeekly,
                             SecondaryRemainingFraction = weeklyFraction,
-                            SecondaryResetAt = weeklyReset,
-                            SecondaryLimitLabel = "WEEKLY"
+                            SecondaryResetAt = weeklyReset
                         });
                     }
                 }
@@ -491,16 +472,9 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
 
         var status = new AgentStatus
         {
-            ProviderName = ProviderName,
             IsSuccess = models.Count > 0,
             LastUpdated = DateTime.UtcNow,
-            AccountName = "Antigravity Pro",
-            AccountIdentifier = "Active Session",
-            Tier = "Pro",
-            Models = models,
-            StatusMessage = models.Count > 0
-                ? $"Live Antigravity quotas synchronized ({models.Count} pools active)"
-                : "Unable to parse /usage output."
+            Models = models
         };
 
         if (models.Count > 0)
@@ -511,9 +485,7 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
                 status.StatusLevel = StatusLevel.Throttled;
                 status.Cooldown = new CooldownInfo
                 {
-                    IsOnCooldown = true,
-                    AffectedModel = lowest.Name,
-                    ResetTimestamp = lowest.ResetAt ?? DateTime.UtcNow.AddMinutes(30)
+                    IsOnCooldown = true
                 };
             }
             else if (lowest.RemainingFraction <= 0.20)
@@ -531,12 +503,11 @@ public class AntigravityQuotaProvider : IAgentQuotaProvider, IDisposable
 
     private AgentStatus CreateOfflineStatus(string message)
     {
+        Debug.WriteLine(message);
         return new AgentStatus
         {
-            ProviderName = ProviderName,
             IsSuccess = false,
             StatusLevel = StatusLevel.Warning,
-            StatusMessage = message,
             LastUpdated = DateTime.UtcNow
         };
     }

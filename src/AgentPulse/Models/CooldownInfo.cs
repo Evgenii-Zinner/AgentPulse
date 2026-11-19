@@ -6,9 +6,6 @@ public class CooldownInfo
 {
     public bool IsOnCooldown { get; set; }
     public TimeSpan CooldownRemaining { get; set; }
-    public double MinutesRemaining => Math.Max(0, CooldownRemaining.TotalMinutes);
-    public DateTime? ResetTimestamp { get; set; }
-    public string? AffectedModel { get; set; }
 
     public string FormattedCooldown
     {

@@ -334,8 +334,5 @@ public sealed partial class MainWindow : Window
     public Visibility GetInvertedVisibility(bool isLoading) =>
         isLoading ? Visibility.Collapsed : Visibility.Visible;
 
-    public string GetButtonText(bool isLoading) =>
-        isLoading ? "Refreshing..." : "Refresh Quotas";
-
     #endregion
 }

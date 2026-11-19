@@ -10,15 +10,6 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
-
-            <!-- Black & White Minimalist Tokens -->
-            <SolidColorBrush x:Key="MonoBackgroundBrush" Color="#000000" />
-            <SolidColorBrush x:Key="MonoSurfaceBrush" Color="#0C0C0C" />
-            <SolidColorBrush x:Key="MonoBorderBrush" Color="#222222" />
-            <SolidColorBrush x:Key="MonoTrackBrush" Color="#222222" />
-            <SolidColorBrush x:Key="MonoTextPrimaryBrush" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="MonoTextSecondaryBrush" Color="#A3A3A3" />
-            <SolidColorBrush x:Key="MonoTextMutedBrush" Color="#525252" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>

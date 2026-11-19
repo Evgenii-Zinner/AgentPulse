@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.NetworkInformation;
 using System.Threading;
@@ -30,43 +31,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _isDisposed;
 
     [ObservableProperty]
-    private string _providerName = "Google Antigravity";
-
-    [ObservableProperty]
-    private string _accountIdentifier = "Active Session";
-
-    [ObservableProperty]
-    private string _accountName = "Antigravity Developer";
-
-    [ObservableProperty]
-    private string _tier = "Pro";
-
-    [ObservableProperty]
-    private string _statusMessage = "Synchronizing Antigravity quotas...";
-
-    [ObservableProperty]
-    private StatusLevel _statusLevel = StatusLevel.Normal;
-
-    [ObservableProperty]
-    private string _statusPillColor = "#10B981";
-
-    [ObservableProperty]
-    private string _statusPillText = "Operational";
-
-    [ObservableProperty]
     private bool _isOnCooldown;
 
     [ObservableProperty]
     private string _cooldownRemainingText = "Ready";
-
-    [ObservableProperty]
-    private string _cooldownAffectedModel = string.Empty;
-
-    [ObservableProperty]
-    private string _lastUpdatedText = "Never";
-
-    [ObservableProperty]
-    private string _nextResetScheduledText = "All Ready";
 
     [ObservableProperty]
     private string _trayTooltip = "Agent Pulse: Initializing...";
@@ -78,13 +46,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private ObservableCollection<ModelQuota> _models = new();
 
     [ObservableProperty]
-    private QuotaGroup _antigravityGemini = new() { Name = "Gemini", Id = "gemini", Percent = 100, ResetText = "Ready" };
+    private QuotaGroup _antigravityGemini = new();
 
     [ObservableProperty]
-    private QuotaGroup _antigravityClaude = new() { Name = "Claude & GPT", Id = "claude", Percent = 100, ResetText = "Ready" };
+    private QuotaGroup _antigravityClaude = new();
 
     [ObservableProperty]
-    private QuotaGroup _antigravityArgon = new() { Name = "Gemini 4 Argon", Id = "argon", Percent = 100, ResetText = "Ready" };
+    private QuotaGroup _antigravityArgon = new();
 
     public MainViewModel(AntigravityQuotaProvider quotaProvider, LockScreenUpdater lockScreenUpdater)
     {
@@ -131,7 +99,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Refresh failed: {ex.Message}";
+            Debug.WriteLine($"Refresh failed: {ex.Message}");
         }
         finally
         {
@@ -147,14 +115,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void ApplyStatus(AgentStatus status)
     {
         _lastStatus = status;
-
-        ProviderName = status.ProviderName;
-        AccountIdentifier = string.IsNullOrEmpty(status.AccountIdentifier) ? "Antigravity Session" : status.AccountIdentifier;
-        AccountName = string.IsNullOrEmpty(status.AccountName) ? "Antigravity Pro" : status.AccountName;
-        Tier = status.Tier;
-        StatusLevel = status.StatusLevel;
-        StatusMessage = status.StatusMessage ?? "Operational";
-        LastUpdatedText = status.LastUpdated.ToLocalTime().ToString("HH:mm:ss");
 
         Models.Clear();
         foreach (var m in status.Models)
@@ -174,9 +134,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var argon = status.Models.Where(m =>
             m.Name.Contains("argon", StringComparison.OrdinalIgnoreCase)).ToList();
 
-        UpdateGroup(AntigravityGemini, gemini, "Gemini", "gemini");
-        UpdateGroup(AntigravityClaude, claude, "Claude & GPT", "claude");
-        UpdateGroup(AntigravityArgon, argon, "Gemini 4 Argon", "argon");
+        UpdateGroup(AntigravityGemini, gemini);
+        UpdateGroup(AntigravityClaude, claude);
+        UpdateGroup(AntigravityArgon, argon);
 
         // Force UI notification for updated groups
         OnPropertyChanged(nameof(AntigravityGemini));
@@ -185,25 +145,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // Cooldown state
         IsOnCooldown = status.Cooldown.IsOnCooldown;
-        CooldownAffectedModel = status.Cooldown.AffectedModel ?? string.Empty;
         CooldownRemainingText = status.Cooldown.FormattedCooldown;
-
-        // Visual Pill styling
-        switch (status.StatusLevel)
-        {
-            case StatusLevel.Throttled:
-                StatusPillColor = "#EF4444";
-                StatusPillText = "Cooldown Active";
-                break;
-            case StatusLevel.Warning:
-                StatusPillColor = "#F59E0B";
-                StatusPillText = "Quota Warning";
-                break;
-            default:
-                StatusPillColor = "#10B981";
-                StatusPillText = "Operational";
-                break;
-        }
 
         TrayTooltip = $"Antigravity: Gemini {AntigravityGemini.Percent}% (5h) / {AntigravityGemini.SecondaryPercent}% (Wk) | Argon {AntigravityArgon.Percent}%";
 
@@ -215,32 +157,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ScheduleNextExactResetTimer(status);
     }
 
-    private static void UpdateGroup(QuotaGroup target, List<ModelQuota> list, string defaultName, string defaultId)
+    private static void UpdateGroup(QuotaGroup target, List<ModelQuota> list)
     {
         if (list.Count == 0)
         {
-            target.Name = defaultName;
-            target.Id = defaultId;
-            target.PrimaryLabel = "5h";
             target.Percent = 100;
-            target.Fraction = 1.0;
             target.ResetText = "Ready";
-            target.HasSecondaryLimit = false;
+            target.SecondaryPercent = 100;
+            target.SecondaryResetText = "Ready";
             return;
         }
 
         var item = list.First();
-        target.Name = item.Name;
-        target.Id = item.Id;
-        target.PrimaryLabel = item.PrimaryLimitLabel;
         target.Percent = item.PercentRemaining;
-        target.Fraction = item.RemainingFraction;
         target.ResetText = item.FormattedReset;
-        target.HasSecondaryLimit = item.HasSecondaryLimit;
         target.SecondaryPercent = item.SecondaryPercentRemaining;
-        target.SecondaryFraction = item.SecondaryRemainingFraction;
         target.SecondaryResetText = item.FormattedSecondaryReset;
-        target.SecondaryLabel = item.SecondaryLimitLabel;
     }
 
     private void ScheduleNextExactResetTimer(AgentStatus status)
@@ -258,9 +190,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var delay = nextResetModel.ResetAt.Value - DateTime.UtcNow;
             if (delay > TimeSpan.Zero)
             {
-                var localResetTime = nextResetModel.ResetAt.Value.ToLocalTime();
-                NextResetScheduledText = $"Reset at {localResetTime:HH:mm:ss}";
-
                 var triggerDelay = delay.Add(TimeSpan.FromSeconds(1));
 
                 _exactResetTimer = new Timer(async _ =>
@@ -281,8 +210,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return;
             }
         }
-
-        NextResetScheduledText = "All Ready";
     }
 
     private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
@@ -351,15 +278,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (remaining > TimeSpan.Zero)
             {
                 IsOnCooldown = true;
-                CooldownAffectedModel = cooldownModel.Name;
 
                 if (remaining.TotalHours >= 1)
                     CooldownRemainingText = $"{(int)remaining.TotalHours}h {remaining.Minutes:D2}m {remaining.Seconds:D2}s";
                 else
                     CooldownRemainingText = $"{remaining.Minutes:D2}m {remaining.Seconds:D2}s";
 
-                StatusPillColor = "#EF4444";
-                StatusPillText = "Cooldown Active";
                 TrayTooltip = $"Antigravity: COOLDOWN ({CooldownRemainingText})";
                 return;
             }
@@ -369,8 +293,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             IsOnCooldown = false;
             CooldownRemainingText = "Ready";
-            StatusPillColor = "#10B981";
-            StatusPillText = "Operational";
         }
     }
 
